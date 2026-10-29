@@ -76,8 +76,14 @@ pub fn fetch_window(sid: ServerId, ask: &Ask, current: Option<(&[Row], PageInfo)
         rows.iter().filter(|(_, item)| !ask.hidden.contains(&item.sec)).cloned().collect()
     });
     let retained_all = rows.len() <= HUB_FETCH_COUNT as usize;
-    if ask.before { rows.truncate(HUB_FETCH_COUNT as usize); }
-    else if !retained_all { rows.drain(..rows.len() - HUB_FETCH_COUNT as usize); }
+    // The room a read makes for its own page: rows the window already held, shed here and put back
+    // by [`reattach`] when the read did not use the room it made.
+    let mut shed = Vec::new();
+    if ask.before {
+        if rows.len() > HUB_FETCH_COUNT as usize { shed = rows.split_off(HUB_FETCH_COUNT as usize); }
+    } else if !retained_all {
+        shed = rows.drain(..rows.len() - HUB_FETCH_COUNT as usize).collect();
+    }
     let mut offset = if ask.before { ask.start } else {
         current_info.filter(|_| retained_all).map_or_else(|| rows.first().map_or(ask.start, |row| row.0), |info| info.offset)
     };
@@ -181,7 +187,41 @@ pub fn fetch_window(sid: ServerId, ask: &Ask, current: Option<(&[Row], PageInfo)
             if !more { break; }
         }
     }
+    // A forward read that ended the listing could not fill the window it made room for (it read
+    // something, and there is no page after it): it takes the rows it shed back rather than shrink
+    // the row's window at its last page.
+    let (rows, offset) = if ask.before || more || end <= ask.start { (rows, offset) } else { reattach(rows, shed, offset) };
+    if let Some(last) = rows.last() { end = end.max(last.0 + 1); }
     Some((rows, PageInfo { offset, end, total, more, unstable: false }))
+}
+
+/// Puts back the rows a forward read shed to make room for its page, when that page ended the
+/// listing and so could not use the room. A window is bounded by [`MAX_SHELF_ITEMS`], not by how
+/// much of itself one read happened to bring back, and at a listing's last page the difference is
+/// not cosmetic: asked for the tail of a 50-row hub at position 49, the window shed its first twelve
+/// rows, the tail page re-read one of the rows it kept, and the window came back holding 13 of its
+/// 24 cards at offset 37 instead of 26 — twelve cards vanished from the row at its last page and
+/// every card under the focus slid by twelve. The shed rows are the row's own, still at the listing
+/// positions they were read from, so they are only re-attached where they meet the window's edge; a
+/// listing that moved under the read leaves them disjoint and the window keeps what the read
+/// brought.
+fn reattach(mut rows: Vec<Row>, shed: Vec<Row>, mut offset: usize) -> (Vec<Row>, usize) {
+    let room = MAX_SHELF_ITEMS.saturating_sub(rows.len());
+    if room == 0 || shed.is_empty() { return (rows, offset); }
+    let mut floor = rows.first().map_or(usize::MAX, |row| row.0);
+    let mut back = Vec::new();
+    for row in shed.into_iter().rev() {
+        if floor == 0 || floor == usize::MAX || row.0.saturating_add(1) != floor || back.len() == room { break; }
+        floor = row.0;
+        back.push(row);
+    }
+    if !back.is_empty() {
+        back.reverse();
+        offset = back[0].0;
+        back.append(&mut rows);
+        rows = back;
+    }
+    (rows, offset)
 }
 
 /// Where the edge is now. `page` is the read that started at `from`, covering the edge's old position.
@@ -943,3 +983,7 @@ mod ledger_note_tests;
 #[cfg(test)]
 #[path = "paging_repeated_key_tests.rs"]
 mod repeated_key_tests;
+
+#[cfg(test)]
+#[path = "paging_tail_window_tests.rs"]
+mod tail_window_tests;

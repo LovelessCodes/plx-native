@@ -623,13 +623,24 @@ fn a_500_card_row_whose_listing_starts_with_its_preview_walks_to_its_end_and_bac
     assert_each_once(&windows, len);
     assert_eq!(window_keys(&end).last().unwrap(), "499");
     assert!(!end.more);
+    // And back. The window that ends the listing keeps its span, so the walk back re-anchors on that
+    // window's edge rather than on the forward walk's page boundaries: the two directions cross the
+    // listing on grids twelve rows apart. What has to hold is that nothing is skipped and the walk
+    // reaches the head.
     let mut shelf = end;
-    for expected in windows.iter().rev().skip(1) {
+    let mut seen = std::collections::HashSet::new();
+    let mut steps = 0;
+    while shelf.offset > 0 {
+        seen.extend(window_keys(&shelf));
         shelf = move_row(&shelf, true, listing, batch(|_| true));
-        assert_eq!(&window_keys(&shelf), expected);
+        assert!(shelf.items.len() <= 24);
+        steps += 1;
+        assert!(steps <= windows.len() + 2, "the walk back reaches the head");
     }
+    seen.extend(window_keys(&shelf));
     assert_eq!(shelf.offset, 0);
     assert_eq!(window_keys(&shelf)[0], "0");
+    assert_eq!(seen.len(), len, "walking back shows every item");
 }
 
 #[test]

@@ -695,9 +695,12 @@ fn a_paged_response_without_total_size_is_read_from_its_page_size_alone() {
         listing(start, size)
     }).unwrap().shelves.remove(0);
     assert_eq!(calls, vec![(23, 25)], "the ask starts at the retained edge row, 23");
-    assert_eq!(second.positions, (12..30).collect::<Vec<_>>());
-    assert_eq!(window_keys(&second), key_range(12..=29));
-    assert_eq!((second.offset, second.end), (12, 30));
+    // The page ends the listing and holds seven rows, six short of what the window shed for it, so
+    // the six come back: the window keeps its span at the last page instead of shrinking under a
+    // focus that has nowhere to move to.
+    assert_eq!(second.positions, (6..30).collect::<Vec<_>>());
+    assert_eq!(window_keys(&second), key_range(6..=29));
+    assert_eq!((second.offset, second.end), (6, 30));
     assert!(!second.more);
 }
 
